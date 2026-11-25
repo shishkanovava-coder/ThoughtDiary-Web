@@ -1,0 +1,63 @@
+name: Publish diary for iPhone
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Prepare website
+        run: |
+          mkdir -p web
+          cp index.html manifest.webmanifest sw.js icon.svg web/
+      - name: Generate icon and check scripts
+        run: |
+          python3 - <<'PY'
+          import struct,zlib,re,pathlib
+          p=pathlib.Path('web')
+          def chunk(t,d):
+              return struct.pack('!I',len(d))+t+d+struct.pack('!I',zlib.crc32(t+d)&0xffffffff)
+          def make_icon(n,path):
+              raw=bytearray()
+              for y in range(n):
+                  raw.append(0)
+                  for x in range(n):
+                      u,v=x*192/n,y*192/n
+                      col=(53,48,68)
+                      if 49<=v<148 and (39<=u<90 or 102<=u<153):
+                          col=(203,185,245)
+                      if (68<=v<74 or 85<=v<91) and (51<=u<78 or 114<=u<141):
+                          col=(53,48,68)
+                      raw.extend(col)
+              path.write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',n,n,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))
+          make_icon(192,p/'icon.png')
+          make_icon(512,p/'icon-512.png')
+          import json
+          m=p/'manifest.webmanifest'
+          obj=json.loads(m.read_text())
+          obj['icons'].append({'src':'icon-512.png','sizes':'512x512','type':'image/png','purpose':'any'})
+          m.write_text(json.dumps(obj,ensure_ascii=False))
+          for i,script in enumerate(re.findall(r'<script>(.*?)</script>',(p/'index.html').read_text(),re.S)):
+              pathlib.Path('/tmp/diary-script-'+str(i)+'.js').write_text(script)
+          PY
+          for file in /tmp/diary-script-*.js; do node --check "$file"; done
+          node --check web/sw.js
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v4
